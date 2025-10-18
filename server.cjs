@@ -1,82 +1,86 @@
-// Express setup
+// server.cjs - CommonJS Module
 const express = require('express');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
-const { GoogleGenAI } = require('@google/genai');
+const { GoogleGenAI } = require('@google/genai'); // Use require
+
+// .env फ़ाइल का उपयोग करने के लिए अगर आप लोकल पर चला रहे हैं।
+// Render पर, यह ज़रूरी नहीं है क्योंकि आप environment variables का उपयोग कर रहे हैं।
+// if (process.env.NODE_ENV !== 'production') {
+//   require('dotenv').config();
+// }
 
 const app = express();
-const port = process.env.PORT || 10000; // Use PORT from environment or default to 10000
+const port = process.env.PORT || 3000;
+const apiKey = process.env.GEMINI_API_KEY;
 
-// Initialize Google GenAI
-// NOTE: Ensure the GEMINI_API_KEY environment variable is set on Render!
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-const model = "gemini-2.5-flash-preview-09-2025";
+// API Key चेक करना
+if (!apiKey) {
+    console.error("GEMINI_API_KEY is not set in environment variables.");
+    // अगर API Key नहीं है तो ऐप को बंद कर दें या डिप्लॉयमेंट फेल कर दें
+    process.exit(1); 
+}
 
-// --- CORS Configuration ---
-// यह सुनिश्चित करता है कि आपका लोकल क्लाइंट (index.html) Render सर्वर से बात कर सके।
-// हमने यहाँ 'origin: *' सेट कर दिया है, जिसका मतलब है कि यह किसी भी डोमेन से आने वाले
-// रिक्वेस्ट्स को स्वीकार करेगा। यह लोकल डेवलपमेंट के लिए सुरक्षित और आसान है।
-app.use(cors({
-    origin: '*', // Allow all origins for simplicity in this project setup
-    methods: ['GET', 'POST', 'PUT', 'DELETE'], // Allowed methods
-    allowedHeaders: ['Content-Type', 'Authorization'] // Allowed headers
-}));
-// --- End CORS Configuration ---
+const ai = new GoogleGenAI(apiKey);
+const model = "gemini-2.5-flash"; // आप इस मॉडल का उपयोग कर रहे हैं
 
+// 1. CORS सेटअप: केवल आपके frontend URL को एक्सेस की अनुमति दें
+// अपने Live frontend URL से बदलें
+const allowedOrigins = ['YOUR_FRONTEND_URL']; 
 
-// Middleware for JSON parsing and rate limiting
+const corsOptions = {
+    origin: (origin, callback) => {
+        // Render पर 'origin' null हो सकता है, इसलिए हम इसकी अनुमति देते हैं
+        if (allowedOrigins.includes(origin) || !origin) {
+            callback(null, true);
+        } else {
+            callback(new Error('Not allowed by CORS'));
+        }
+    }
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
 
-// Simple rate limiting to prevent abuse
+// 2. Rate Limiting सेटअप (सुरक्षा के लिए)
 const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100, // Limit each IP to 100 requests per 15 minutes
-    standardHeaders: true,
-    legacyHeaders: false,
+    windowMs: 15 * 60 * 1000, // 15 मिनट
+    max: 100, // प्रत्येक IP को 15 मिनट में 100 अनुरोधों तक सीमित करें
+    message: "Too many requests from this IP, please try again after 15 minutes"
 });
 app.use(limiter);
 
-
-// Basic health check endpoint
+// 3. Health Check Route
 app.get('/', (req, res) => {
-    res.status(200).send({ message: "Gemini Proxy Server is running and healthy!" });
+    res.send({ status: "Server is running (CJS Mode)" });
 });
 
-
-// Main endpoint to generate content
+// 4. Gemini API Proxy Route
 app.post('/generate', async (req, res) => {
     const { prompt } = req.body;
 
     if (!prompt) {
-        return res.status(400).send({ error: "Prompt is required in the request body." });
+        return res.status(400).json({ error: 'Prompt is required' });
     }
 
     try {
         const response = await ai.models.generateContent({
             model: model,
             contents: [{ role: "user", parts: [{ text: prompt }] }],
-            // Optional: You can add system instructions or tools here if needed
         });
 
-        // The response structure from the SDK
-        const generatedText = response.candidates?.[0]?.content?.parts?.[0]?.text;
-
-        if (!generatedText) {
-            console.error("Gemini API returned no text:", response);
-            return res.status(500).send({ error: "Gemini API failed to return text." });
-        }
-
-        // Send the generated text back to the client
-        res.status(200).send({ text: generatedText });
-
+        res.json({ text: response.text });
     } catch (error) {
-        console.error("Error during Gemini content generation:", error.message);
-        res.status(500).send({ error: "Internal Server Error during AI generation.", details: error.message });
+        console.error('Gemini API Error:', error.message);
+        // उपयोगकर्ता को सीधे API कुंजी त्रुटियाँ न दिखाएँ
+        res.status(500).json({ 
+            error: 'An internal server error occurred.',
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
     }
 });
 
-
-// Start the server
+// 5. सर्वर शुरू करना
 app.listen(port, () => {
-    console.log(`Server running at http://localhost:${port}`);
+    console.log(`Server listening on port ${port} (CJS Mode)`);
 });

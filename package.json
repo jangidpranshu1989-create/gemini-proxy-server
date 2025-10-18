@@ -1,16 +1,16 @@
 {
   "name": "gemini-proxy-server",
   "version": "1.0.0",
-  "description": "Proxy server for Google Gemini API.",
+  "description": "A robust Node.js proxy for the Gemini API, ready for deployment on any platform.",
   "main": "server.cjs",
-  "type": "commonjs",  
+  "type": "commonjs",
   "scripts": {
-    "start": "node server.cjs"
+    "start": "node api/index.cjs" 
   },
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.18.2",
-    "express-rate-limit": "^7.2.0",
+     
     "@google/genai": "^0.17.0"
   }
 }

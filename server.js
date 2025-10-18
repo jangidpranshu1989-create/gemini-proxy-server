@@ -1,157 +1,82 @@
-// server.js - Electron App के लिए API प्रॉक्सी
-
-// यह सर्वर आपकी API Key को सुरक्षित रूप से रखता है और Node.js के साथ Express का उपयोग करता है।
+// server.js - Gemini API ke liye Node.js Proxy Server
 
 const express = require('express');
-
 const cors = require('cors');
-
-// Gemini SDK
-
-const { GoogleGenAI } = require('@google/genai'); 
-
-
+// Nayi aur stable Gemini SDK ko import karein
+// Version 0.15.0 ke liye yeh class name sahi hai
+const { GoogleGenerativeAI } = require('@google/generative-ai'); 
 
 const app = express();
 
-// पोर्ट को पर्यावरण चर (Environment Variable) से लें, 3000 डिफ़ॉल्ट है (क्लाउड होस्टिंग के लिए ज़रूरी)
-
+// Port Configuration
 const port = process.env.PORT || 3000;
 
-
-
-// IMPORTANT: API Key को Environment Variable से लोड करें (सबसे सुरक्षित तरीका)
-
+// 🔑 API Key ko Environment Variable se load karein
 const apiKey = process.env.GEMINI_API_KEY;
 
-
-
 if (!apiKey) {
-
-    // अगर Key नहीं मिली, तो एक त्रुटि दिखाएँ और सर्वर बंद कर दें।
-
-    console.error("त्रुटि: GEMINI_API_KEY Environment Variable में सेट नहीं है। सर्वर शुरू नहीं हो सकता।");
-
+    console.error("त्रुटि: GEMINI_API_KEY Environment Variable mein set nahi hai.");
     process.exit(1);
-
 }
 
+// Gemini क्लाइंट को initialize karein
+const ai = new GoogleGenerativeAI(apiKey);
 
-
-// Gemini क्लाइंट को Key के साथ इनिशियलाइज़ करें
-
-const ai = new GoogleGenAI(apiKey);
-
-
-
-// 🚨 MANDATE 1: CORS SECURITY UPDATE 🚨
-
-// सुरक्षा के लिए, '*' को बदलकर अपनी क्लाइंट वेबसाइट का URL डालें।
-
-// उदाहरण: const clientOrigin = 'https://mera-chat-app.netlify.app';
-
-const clientOrigin = '*'; // <--- ⚠️ प्रोडक्शन में इसे **ज़रूर** बदलें!
-
-
-
-// CORS: यह आपके क्लाइंट (HTML/Electron) को सर्वर से बात करने की अनुमति देता है।
+// 🌐 CORS Configuration
+// '*' ko deployment ke baad apne frontend URL se badalna hai!
+const clientOrigin = '*'; 
 
 app.use(cors({
-
     origin: clientOrigin,
-
     methods: ['POST'],
-
     allowedHeaders: ['Content-Type'],
-
 }));
 
-
-
-// आने वाले JSON डेटा को प्रोसेस करने के लिए
-
+// Incoming JSON data ko process karne ke liye
 app.use(express.json());
 
-
-
-/**
-
- * Gemini API प्रॉक्सी Endpoint: /api/generate-content
-
- */
-
+// --- API Endpoint for Content Generation ---
 app.post('/api/generate-content', async (req, res) => {
-
     try {
-
+        // Frontend se prompt aur history receive karein
         const { prompt, history } = req.body;
-
         
-
         if (!prompt) {
-
             return res.status(400).json({ error: "प्रॉम्प्ट अनिवार्य है।" });
-
         }
 
-
-
-        // चैट हिस्ट्री को Gemini API के अनुरूप भागों (contents) में बदलें
-
-        const contents = history.map(msg => ({
-
-            role: msg.role,
-
-            parts: [{ text: msg.text }]
-
-        }));
-
-
-
-        console.log(`नया अनुरोध प्राप्त हुआ। प्रॉम्प्ट: ${prompt.substring(0, 50)}...`);
-
-
-
-        // सुरक्षित Gemini API कॉल
-
-        const response = await ai.models.generateContent({
-
+        // Chat service ko initialize karein
+        const chat = ai.getGenerativeModel({
             model: 'gemini-2.5-flash',
-
-            contents: contents,
-
+            config: {
+                // System Instruction se model ka behavior set karein
+                systemInstruction: "Aap ek friendly aur madadgaar AI assistant hain. Hamesha Hindi (Latin script) mein jawab dein, bilkul aasaan aur conversational tone mein.",
+                temperature: 0.7,
+            },
+        }).createChat({
+            // Pichli baatcheet (chat history) yahan load ho jaayegi
+            history: history
         });
 
-
+        // Naya user prompt bhejkar response generate karein
+        const response = await chat.sendMessage({ text: prompt });
 
         const generatedText = response.text;
 
-
-
-        // क्लाइंट को जवाब भेजें
-
+        // Generated text ko client ko wapas bhej dein
         res.json({ text: generatedText });
 
-
-
     } catch (error) {
-
-        console.error('Gemini API कॉल में त्रुटि:', error.message);
-
-        res.status(500).json({ error: 'इंटरनल सर्वर त्रुटि। API कॉल विफल रहा।' });
-
+        console.error('Gemini API call mein galti:', error.message);
+        // Error ko client tak bhej dein
+        res.status(500).json({ 
+            error: 'Internal Server Error. API call fail ho gayi.', 
+            details: error.message 
+        });
     }
-
 });
 
-
-
-// सर्वर को शुरू करें
-
+// Server ko start karein
 app.listen(port, () => {
-
-    console.log(`✨ प्रॉक्सी सर्वर http://localhost:${port} पर चल रहा है`);
-
-    console.log(`(Production में पोर्ट ${port} पर चल रहा है)`);
-
+    console.log(`✨ Proxy Server chal raha hai: http://localhost:${port}`);
 });

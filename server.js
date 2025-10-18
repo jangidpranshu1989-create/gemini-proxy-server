@@ -1,82 +1,107 @@
-// server.js - Gemini API ke liye Node.js Proxy Server
+// ज़रूरी लाइब्रेरीज़ इम्पोर्ट करें
+import express from 'express';
+import cors from 'cors';
+import rateLimit from 'express-rate-limit';
+import { GoogleGenAI } from '@google/genai'; // Updated SDK import
 
-const express = require('express');
-const cors = require('cors');
-// Nayi aur stable Gemini SDK ko import karein
-// Version 0.15.0 ke liye yeh class name sahi hai
-const { GoogleGenerativeAI } = require('@google/generative-ai'); 
+// .env फ़ाइल से environment variables लोड करें (यह लोकल डेवलपमेंट के लिए ज़रूरी है)
+// Render पर, यह automatically सेट हो जाएगा, इसलिए यह लाइन लोकल टेस्टिंग के लिए है।
+// import 'dotenv/config'; 
 
 const app = express();
-
-// Port Configuration
 const port = process.env.PORT || 3000;
 
-// 🔑 API Key ko Environment Variable se load karein
+// Render पर सेट की गई API Key का उपयोग करें
 const apiKey = process.env.GEMINI_API_KEY;
 
 if (!apiKey) {
-    console.error("त्रुटि: GEMINI_API_KEY Environment Variable mein set nahi hai.");
-    process.exit(1);
+    console.error("❌ ERROR: GEMINI_API_KEY environment variable is not set.");
+    // सर्वर को API key के बिना शुरू होने से रोकें
+    // process.exit(1);
+    // Note: हम यहाँ process.exit नहीं कर रहे हैं, ताकि Render पर log check किया जा सके
 }
 
-// Gemini क्लाइंट को initialize karein
-const ai = new GoogleGenerativeAI(apiKey);
+// Gemini API क्लाइंट शुरू करें
+const ai = new GoogleGenAI({ apiKey });
 
-// 🌐 CORS Configuration
-// '*' ko deployment ke baad apne frontend URL se badalna hai!
-const clientOrigin = '*'; 
-
+// मिडलवेयर सेटअप
+// 1. CORS: इसे हर जगह से रिक्वेस्ट स्वीकार करने के लिए सेट करें (Development/Testing के लिए)
 app.use(cors({
-    origin: clientOrigin,
-    methods: ['POST'],
+    origin: '*', // Production में, इसे अपनी frontend URL पर सेट करें (e.g., 'https://your-frontend-url.com')
+    methods: ['GET', 'POST'],
     allowedHeaders: ['Content-Type'],
 }));
 
-// Incoming JSON data ko process karne ke liye
+// 2. JSON Body Parser
 app.use(express.json());
 
-// --- API Endpoint for Content Generation ---
+// 3. रेट लिमिटर (DDoS से बचने के लिए)
+const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 मिनट
+    max: 100, // हर IP से 15 मिनट में 100 रिक्वेस्ट तक
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+app.use(limiter);
+
+// रूट: होम पेज (स्वास्थ्य जाँच के लिए)
+app.get('/', (req, res) => {
+    res.send('Nexus AI-Bot Proxy Server is running! API Key status: ' + (apiKey ? 'Set' : 'MISSING'));
+});
+
+// मुख्य चैट API रूट
 app.post('/api/generate-content', async (req, res) => {
+    // 1. API Key की जांच करें
+    if (!apiKey) {
+        return res.status(500).json({ error: 'Server configuration error: GEMINI_API_KEY is missing.' });
+    }
+
+    const { prompt, history } = req.body;
+
+    if (!prompt) {
+        return res.status(400).json({ error: 'Prompt field is required.' });
+    }
+
     try {
-        // Frontend se prompt aur history receive karein
-        const { prompt, history } = req.body;
+        // Chat history को Gemini API format में बदलें
+        const chatHistory = history.map(msg => ({
+            role: msg.role === 'user' ? 'user' : 'model',
+            parts: [{ text: msg.text }],
+        }));
+
+        // आखिरी आइटम (User का current prompt) को contents array में डालें
+        const contents = chatHistory;
         
-        if (!prompt) {
-            return res.status(400).json({ error: "प्रॉम्प्ट अनिवार्य है।" });
+        // Chat Session शुरू करें
+        const chat = ai.chats.create({
+            model: "gemini-2.5-flash",
+            // systemInstruction: "You are a helpful and friendly AI assistant.", // यहाँ आप AI को निर्देश दे सकते हैं
+        });
+
+        // मैसेज भेजें
+        const result = await chat.sendMessage({
+            contents: contents
+        });
+
+        // AI का टेक्स्ट निकालें
+        const aiText = result.text;
+        
+        if (!aiText) {
+             return res.status(500).json({ error: 'AI did not return any text. Response structure error.' });
         }
 
-        // Chat service ko initialize karein
-        const chat = ai.getGenerativeModel({
-            model: 'gemini-2.5-flash',
-            config: {
-                // System Instruction se model ka behavior set karein
-                systemInstruction: "Aap ek friendly aur madadgaar AI assistant hain. Hamesha Hindi (Latin script) mein jawab dein, bilkul aasaan aur conversational tone mein.",
-                temperature: 0.7,
-            },
-        }).createChat({
-            // Pichli baatcheet (chat history) yahan load ho jaayegi
-            history: history
-        });
-
-        // Naya user prompt bhejkar response generate karein
-        const response = await chat.sendMessage({ text: prompt });
-
-        const generatedText = response.text;
-
-        // Generated text ko client ko wapas bhej dein
-        res.json({ text: generatedText });
+        // क्लाइंट को जवाब भेजें
+        res.json({ text: aiText });
 
     } catch (error) {
-        console.error('Gemini API call mein galti:', error.message);
-        // Error ko client tak bhej dein
-        res.status(500).json({ 
-            error: 'Internal Server Error. API call fail ho gayi.', 
-            details: error.message 
-        });
+        console.error('Gemini API Error:', error);
+        // Debugging के लिए error message को क्लाइंट को भेजें
+        res.status(500).json({ error: 'Failed to generate content from AI. Check server logs for details.' });
     }
 });
 
-// Server ko start karein
+// सर्वर शुरू करें
 app.listen(port, () => {
-    console.log(`✨ Proxy Server chal raha hai: http://localhost:${port}`);
+    console.log(`Server running at http://localhost:${port}`);
+    console.log(`Open in browser: http://localhost:${port}`);
 });
